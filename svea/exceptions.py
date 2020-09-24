@@ -9,3 +9,11 @@ class MissingFiles(SveaException):
 
 class DtypeError(SveaException):
     pass
+
+
+class PathError(SveaException):
+    pass
+
+
+class PermissionError(SveaException):
+    pass
