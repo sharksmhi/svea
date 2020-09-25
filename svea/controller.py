@@ -6,7 +6,9 @@ import os
 import openpyxl
 
 from ctdpy.core import session as ctdpy_session
-from ctdpy.core.utils import generate_filepaths
+from ctdpy.core.utils import generate_filepaths, get_reversed_dictionary
+from sharkpylib.qc.qc_default import QCBlueprint
+
 
 from svea import exceptions
 
@@ -27,14 +29,55 @@ class SveaSteps:
         self.create_station_plots = False
 
 
+class CommonFiles:
+    def change_location(self, directory):
+        """
+        Files will be copied to new location. Option to overwrite.
+        :param directory:
+        :param overwrite:
+        :return:
+        """
+        if self._file_paths is None:
+            raise exceptions.PathError(f'Missing paths for {self._title}')
+        print('directory', directory)
+        directory = Path(directory)
+        if '.' in directory.name:
+            text = f'Path is not a directory: {directory}'
+            self.logger.error(text)
+            raise exceptions.PathError(text)
+        if not directory.exists():
+            os.makedirs(directory)
+
+        self.logger.info(f'Copying files. Permission to overwrite is set to {self.allow_overwrite}')
+        file_paths = []
+        for file_path in self._file_paths:
+            file_name = file_path.name
+            new_file_path = Path(directory, file_name)
+            file_paths.append(new_file_path)
+            if not self.allow_overwrite and new_file_path.exists():
+                continue
+            if file_path == new_file_path:
+                continue
+            shutil.copyfile(file_path, new_file_path)
+        self._file_paths = file_paths
+
+
+
 class SveaController:
     def __init__(self, logger=None):
         self.logger = get_logger(logger)
+        
+        self.dirs = {}
 
-        self._working_directory = None
-        self._export_directory = None
+        self.dirs['working'] = None
+        self.dirs['cnv_files'] = None
+        self.dirs['raw_files'] = None
+        self.dirs['standard_files'] = None
+        self.dirs['standard_files_qc'] = None
 
         self._steps = SveaSteps()
+
+        self._raw_files_object = RawFiles(logger=logger)
 
         self._metadata_object = Metadata(logger=self.logger)
 
@@ -45,60 +88,98 @@ class SveaController:
         self._metadata_file_object.sensor_info_object = self._sensorinfo_object
 
         self._cnv_files_object = CNVfiles(logger=self.logger)
+        
+        self._standard_files_object = ProfileStandardFormatFiles(logger=self.logger)
 
         self._create_metadata_file_object = CreateMetadataFile(logger=self.logger)
         self._create_metadata_file_object.metadata_file_object = self._metadata_file_object
         self._create_metadata_file_object.cnv_files_object = self._cnv_files_object
 
-        self._create_standard_format_files_object = CreateStandardFormatFiles(logger=self.logger)
-        self._create_standard_format_files_object.metadata_file_object = self._metadata_file_object
-        self._create_standard_format_files_object.cnv_files_object = self._cnv_files_object
+        self._create_standard_files_object = CreateStandardFormatFiles(logger=self.logger)
+        self._create_standard_files_object.metadata_file_object = self._metadata_file_object
+        self._create_standard_files_object.cnv_files_object = self._cnv_files_object
+        
+        self._automatic_qc_object = AutomaticQC(logger=self.logger)
+        self._automatic_qc_object.standard_files_object = self._standard_files_object
 
         self.logger.info('SveaController instance created!')
+        
+    def __repr__(self):
+        dirs_list = []
+        for key, value in self.dirs.items():
+            dirs_list.append(f'{key}: {value}')
+        return '\n'.join(dirs_list)
 
     def _assert_directory(self):
-        if not self._working_directory:
+        if not self.dirs['working']:
             text = 'Working directory is not set'
             self.logger.error(text)
             raise exceptions.MissingFiles(text)
-        elif not self._working_directory.exists():
-            os.makedirs(self._working_directory)
-            self.logger.info(f'Woring directory created: {self._working_directory}')
+        elif not self.dirs['working'].exists():
+            os.makedirs(self.dirs['working'])
+            self.logger.info(f'Woring directory created: {self.dirs["working"]}')
 
     @property
     def working_directory(self):
-        return self._working_directory
+        return self.dirs['working']
 
     @working_directory.setter
     def working_directory(self, directory):
-        self._working_directory = Path(directory)
-        self._export_directory = Path(self._working_directory, 'export')
-        self._metadata_file_object.file_path = self._working_directory
-        self._create_standard_format_files_object.directory = self._export_directory
+        print('working directory', directory)
+        if directory is None:
+            self.dirs['working'] = None
+            self.dirs['cnv_files'] = None
+            self.dirs['raw_files'] = None
+            self.dirs['standard_files'] = None
+            self.dirs['standard_files_qc'] = None
+        else:
+            self.dirs['working'] = Path(directory)
+            self.dirs['raw_files'] = Path(self.dirs['working'], 'raw')
+            self.dirs['cnv_files'] = Path(self.dirs['working'], 'cnv')
+            self.dirs['standard_files'] = Path(self.dirs['working'], 'standard_format')
+            self.dirs['standard_files_qc'] = Path(self.dirs['working'], 'standard_format_auto_qc')
+
+        self._metadata_file_object.file_path = self.dirs['cnv_files']
+        self._create_standard_files_object.directory = self.dirs['standard_files']
+        self._standard_files_object.file_paths = self.dirs['standard_files']
+
         self.logger.info(f'Working directory set to: {directory}')
+
+    def set_path_working_directory(self, directory):
+        self.working_directory = directory
 
     @property
     def metadata_file_path(self):
         return self._metadata_file_object.file_path
 
-    def sbe_processing(self, file_paths='temp list with cnv files'):
+    def sbe_processing(self):
         # TODO: run processing
-        self._cnv_files_object.file_paths = file_paths
+        self._assert_directory()
+        # if not self._raw_files_object.file_paths:
+        #     raise exceptions.PathError('No raw files selected')
+        self._raw_files_object.change_location(self.dirs['raw_files'])
         self._steps.sbe_processing = True
+        return self.dirs['raw_files']
 
     def create_metadata_file(self):
         self._assert_directory()
         self._create_metadata_file_object.create_file()
-        self._cnv_files_object.change_location(self._working_directory)
+        self._cnv_files_object.change_location(self.dirs['cnv_files'])
         self._steps.create_metadata_file = True
+        return self.dirs['cnv_files']
 
     def create_standard_format(self):
         self._assert_directory()
-        self._create_standard_format_files_object.create_files()
+        self._create_standard_files_object.create_files()
         self._steps.create_standard_format = True
+        return self._create_standard_files_object.directory
 
     def perform_automatic_qc(self):
+        self._assert_directory()
+        print(self._automatic_qc_object.standard_files_object.file_paths)
+        self._automatic_qc_object.run_qc(self.dirs['standard_files_qc'])
         self._steps.perform_automatic_qc = True
+        return self.dirs['standard_files_qc']
 
     def open_visual_qc(self):
         self._steps.open_visual_qc = True
@@ -121,12 +202,37 @@ class SveaController:
         self._metadata_object.set(metadata)  # option to update as well (other method)
 
     @property
+    def raw_files(self):
+        return self._raw_files_object.file_paths
+
+    @raw_files.setter
+    def raw_files(self, paths):
+        self._raw_files_object.file_paths = paths
+
+    def set_path_raw_files(self, paths):
+        self.raw_files = paths
+
+    @property
     def cnv_files(self):
         return self._cnv_files_object.file_paths
 
     @cnv_files.setter
     def cnv_files(self, paths):
         self._cnv_files_object.file_paths = paths
+
+    def set_path_cnv_files(self, paths):
+        self.cnv_files = paths
+
+    @property
+    def standard_format_files(self):
+        return self._standard_files_object.file_paths
+
+    @standard_format_files.setter
+    def standard_format_files(self, paths):
+        self._standard_files_object.file_paths = paths
+
+    def set_path_standard_format_files(self, paths):
+        self.standard_format_files = paths
 
     def set_overwrite_permission(self, overwrite):
         if type(overwrite) != bool:
@@ -136,7 +242,44 @@ class SveaController:
         self._metadata_file_object.allow_overwrite = overwrite
         self._cnv_files_object.allow_overwrite = overwrite
         self._create_metadata_file_object.allow_overwrite = overwrite
-        self._create_standard_format_files_object.allow_overwrite = overwrite
+        self._create_standard_files_object.allow_overwrite = overwrite
+        self._automatic_qc_object.allow_overwrite = overwrite
+
+    def reset_paths(self):
+        self.raw_files = None
+        self.cnv_files = None
+        self.standard_format_files = None
+
+
+class RawFiles(CommonFiles):
+    def __init__(self, logger=None):
+        self._title = 'raw files'
+        self.logger = get_logger(logger)
+        self._file_paths = None
+        self.allow_overwrite = False
+
+    @property
+    def file_paths(self):
+        return self._file_paths
+
+    @file_paths.setter
+    def file_paths(self, file_paths):
+        if file_paths is None:
+            self._file_paths = None
+            return
+        suffix_list = ['bl', 'btl', 'hdr', 'hex', 'ros', 'XMLCON']
+        print('=== file_paths', file_paths)
+        if type(file_paths) in [str, Path]:
+            file_paths = Path(file_paths)
+            if file_paths.is_dir():
+                self._file_paths = [Path(file_path) for file_path in list(generate_filepaths(file_paths,
+                                                                                             pattern_list=[f'.{suffix}' for suffix in suffix_list],
+                                                                                             only_from_dir=True))]
+            else:
+                raise exceptions.PathError('Path given to RawFiles is not a directory')
+        else:
+            self._file_paths = [Path(file_path) for file_path in file_paths if file_path.split('.')[-1] in suffix_list]
+
 
 
 class Metadata:
@@ -197,6 +340,7 @@ class SensorInfo:
 
 class MetadataFile:
     def __init__(self, logger=None):
+        self._title = 'metadata file'
         self.logger = get_logger(logger)
         self._file_path = None
         self.metadata_object = None  # source for update
@@ -209,8 +353,19 @@ class MetadataFile:
 
     @file_path.setter
     def file_path(self, file_path):
-        # file_path can be both file path and directory. file_path is sett to actual file path when metadata file is created
-        self._file_path = Path(file_path)
+        if file_path is None:
+            self._file_path = None
+            return
+        path = Path(file_path)
+        # file_path can be both file path and directory. if no xlsx-file is found in directory file_path is sett to actual file path when metadata file is created.
+        if path.is_dir():
+            for file_name in os.listdir(path):
+                if file_name.endswith('.xlsx'):
+                    path = Path(path, file_name)
+                    break
+
+
+        self._file_path = path
     
     @property
     def metadata(self):
@@ -269,8 +424,9 @@ class MetadataFile:
             raise exceptions.MissingFiles(text)
             
             
-class CNVfiles:
+class CNVfiles(CommonFiles):
     def __init__(self, logger=None):
+        self._title = 'cnv files'
         self.logger = get_logger(logger)
         self._file_paths = None
         self.allow_overwrite = False
@@ -281,6 +437,9 @@ class CNVfiles:
 
     @file_paths.setter
     def file_paths(self, file_paths):
+        if file_paths is None:
+            self._file_paths = None
+            return
         if type(file_paths) in [str, Path]:
             file_paths = Path(file_paths)
             if file_paths.is_dir():
@@ -292,31 +451,36 @@ class CNVfiles:
         else:
             self._file_paths = [Path(file_path) for file_path in file_paths if file_path.endswith('.cnv')]
 
-    def change_location(self, directory):
-        """
-        Files will be copied to new location. Option to overwrite.
-        :param directory:
-        :param overwrite:
-        :return:
-        """
-        directory = Path(directory)
-        if not directory.is_dir():
-            text = f'Path is not a directory: {directory}'
-            self.logger.error(text)
-            raise exceptions.PathError(text)
-        if not directory.exists():
-            os.makedirs(directory)
 
-        self.logger.info(f'Copying files. Permission to overwrite is set to {self.allow_overwrite}')
-        file_paths = []
-        for file_path in self._file_paths:
-            file_name = file_path.name
-            new_file_path = Path(directory, file_name)
-            file_paths.append(new_file_path)
-            if not self.allow_overwrite and new_file_path.exists():
-                continue
-            shutil.copyfile(file_path, new_file_path)
-        self._file_paths = file_paths
+class ProfileStandardFormatFiles(CommonFiles):
+    def __init__(self, logger=None):
+        self._title = 'standard format files'
+        self.logger = get_logger(logger)
+        self._file_paths = None
+        self.allow_overwrite = False
+
+    @property
+    def file_paths(self):
+        return self._file_paths
+
+    @file_paths.setter
+    def file_paths(self, file_paths):
+        print('SETTING PATH', file_paths)
+        if file_paths is None:
+            self._file_paths = None
+            return
+        if isinstance(file_paths, str) or isinstance(file_paths, Path):
+            file_paths = Path(file_paths)
+            if file_paths.is_dir():
+                file_paths = [Path(file_path) for file_path in list(generate_filepaths(file_paths,
+                                                                                        pattern_list=['.txt'],
+                                                                                        only_from_dir=True))]
+            else:
+                file_paths = [file_paths]
+        else:
+            file_paths = [Path(file_path) for file_path in file_paths if str(file_path).endswith('.txt')]
+        self._file_paths = [path for path in file_paths if str(path.name).startswith('ctd_profile')]
+        print('LEN _file_paths', len(self._file_paths))
 
 
 class CreateMetadataFile:
@@ -367,8 +531,10 @@ class CreateMetadataFile:
                                            return_data_path=True)
         self.logger.debug(f'Metadata file saved in {time.time() - start_time} seconds at location {save_path}')
         source_path = Path(save_path)
-        target_path = self.metadata_file_object.file_path
-        if target_path.is_dir():
+        target_path = Path(self.metadata_file_object.file_path)
+        if '.' not in target_path.name:
+            if not target_path.exists():
+                os.makedirs(target_path)
             target_path = Path(target_path, source_path.name)
         if target_path.exists() and not self.allow_overwrite:
             text = 'Metadata file already exists and overwrite is set to False'
@@ -384,8 +550,8 @@ class CreateMetadataFile:
             text = 'No metadata file object is set by user'
         elif not self.metadata_file_object.file_path:
             text = 'File path for metadata is not set'
-        elif not self.metadata_file_object.file_path.exists():
-            text = 'File path for metadata does not exist'
+        # elif not self.metadata_file_object.file_path.exists():
+        #     text = f'File path for metadata does not exist: {self.metadata_file_object.file_path}'
         else:
             return
         self.logger.error(text)
@@ -415,6 +581,9 @@ class CreateStandardFormatFiles:
 
     @directory.setter
     def directory(self, directory):
+        if directory is None:
+            self._directory = None
+            return
         directory = Path(directory)
         if '.' in directory.name:
             text = f'Path is not a directory: {directory}'
@@ -431,13 +600,14 @@ class CreateStandardFormatFiles:
         self._assert_metadata_and_cnv()
         self._assert_directory()
         all_file_paths = self.cnv_files_object.file_paths + [self.metadata_file_object.file_path]
+        all_file_paths = [str(path) for path in all_file_paths]
         session = ctdpy_session.Session(filepaths=all_file_paths,
                                         reader='smhi')
 
         start_time = time.time()
         datasets = session.read()
         self.logger.debug(f'{len(self.cnv_files_object.file_paths)} CNV files and one metadata file loaded in {time.time() - start_time} seconds.')
-
+        self.datasets = datasets
         start_time = time.time()
         data_path = session.save_data(datasets,
                                       writer='ctd_standard_template',
@@ -480,6 +650,47 @@ class CreateStandardFormatFiles:
             raise exceptions.MissingFiles(text)
 
 
+class AutomaticQC:
+    def __init__(self, logger=None):
+        self.logger = get_logger(logger)
+        self._file_paths = None
+        self.allow_overwrite = False
+
+        self.standard_files_object = None
+
+    def run_qc(self, output_directory=None):
+        files = self.standard_files_object.file_paths
+        if not files:
+            raise exceptions.MissingFiles('No standard files selected')
+        session = ctdpy_session.Session(filepaths=files,
+                                        reader='ctd_stdfmt')
+
+        datasets = session.read()
+
+        for data_key, item in datasets[0].items():
+            # print(data_key)
+            parameter_mapping = get_reversed_dictionary(session.settings.pmap, item['data'].keys())
+            qc_run = QCBlueprint(item, parameter_mapping=parameter_mapping)
+            qc_run()
+
+        data_path = session.save_data(datasets,
+                                      writer='ctd_standard_template', return_data_path=True,
+                                      # save_path='C:/ctdpy_exports',
+                                      )
+
+        if not os.path.exists(output_directory):
+            os.makedirs(output_directory)
+        for file_name in os.listdir(data_path):
+            source_path = Path(data_path, file_name)
+            target_path = Path(output_directory, file_name)
+            if target_path.exists() and not self.allow_overwrite:
+                continue
+            shutil.copyfile(source_path, target_path)
+
+        return output_directory
+
+
+
 def get_logger(existing_logger=None):
     if not os.path.exists('log'):
         os.makedirs('log')
@@ -494,19 +705,20 @@ if __name__ == '__main__':
     if 1:
         c = SveaController()
 
-        c.working_directory = r'C:\mw\temp_svea'
-        c.cnv_files = r'C:\mw\temp_örjan\data'
+        c.working_directory = r'C:\mw\temp_svea/svea_repo'
+        c.cnv_files = r'C:\mw\data\cnv_files'
+        c.raw_files = r'C:\mw\data\sbe_raw_files'
 
         c.set_overwrite_permission(True)
+        c.sbe_processing()
         c.create_metadata_file()
+        c.create_standard_format()
 
-        # c.create_standard_format()
-
-    s1 = SensorInfo()
-    s1.load_xlsx_sheet(r'C:\mw\Profile\2018\SHARK_Profile_2018_BAS_DEEP\received_data/CTD sensorinfo_org.xlsx', 'Sensorinfo')
-
-    s2 = SensorInfo()
-    s2.load_txt(r'C:\mw\Profile\2018\SHARK_Profile_2018_BAS_DEEP\processed_data/sensorinfo.txt')
+    # s1 = SensorInfo()
+    # s1.load_xlsx_sheet(r'C:\mw\Profile\2018\SHARK_Profile_2018_BAS_DEEP\received_data/CTD sensorinfo_org.xlsx', 'Sensorinfo')
+    #
+    # s2 = SensorInfo()
+    # s2.load_txt(r'C:\mw\Profile\2018\SHARK_Profile_2018_BAS_DEEP\processed_data/sensorinfo.txt')
 
 
 
