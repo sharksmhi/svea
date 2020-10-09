@@ -9,6 +9,8 @@ from ctdpy.core import session as ctdpy_session
 from ctdpy.core.utils import generate_filepaths, get_reversed_dictionary
 from sharkpylib.qc.qc_default import QCBlueprint
 
+from bokeh.plotting import curdoc
+from ctdvis  import session as ctdvis_session
 
 from svea import exceptions
 
@@ -102,6 +104,8 @@ class SveaController:
         self._automatic_qc_object = AutomaticQC(logger=self.logger)
         self._automatic_qc_object.standard_files_object = self._standard_files_object
 
+        self._visual_qc_object = VisualQC(logger=self.logger)
+
         self.logger.info('SveaController instance created!')
         
     def __repr__(self):
@@ -181,7 +185,8 @@ class SveaController:
         self._steps.perform_automatic_qc = True
         return self.dirs['standard_files_qc']
 
-    def open_visual_qc(self):
+    def open_visual_qc(self, directory, **filters):
+        self._visual_qc_object.run(directory=directory, **filters)
         self._steps.open_visual_qc = True
 
     def send_files_to_ftp(self):
@@ -653,7 +658,7 @@ class CreateStandardFormatFiles:
 class AutomaticQC:
     def __init__(self, logger=None):
         self.logger = get_logger(logger)
-        self._file_paths = None
+        # self._file_paths = None
         self.allow_overwrite = False
 
         self.standard_files_object = None
@@ -690,6 +695,44 @@ class AutomaticQC:
         return output_directory
 
 
+class VisualQC:
+    def __init__(self, logger=None):
+        self.logger = get_logger(logger)
+
+    def __repr__(self):
+        str_list = ['Filter options are:']
+        for s in ['month_list', 'ship_list', 'serno_min', 'serno_max']:
+            str_list.append(s)
+        return '\n'.join(str_list)
+
+    def _bokeh_qc_tool(self, directory=None, **filters):
+        # data_dir = 'C:\\Temp\\CTD_DV\\qc_SMHI_2018\\ctd_std_fmt_20200622_130128_april_2020'
+        # data_dir = 'C:\\Arbetsmapp\\datasets\\Profile\\2018\\SHARK_Profile_2018_BAS_SMHI\\processed_data'
+
+        """ Filters are advised to be implemented if the datasource is big, (~ >3 months of SMHI-EXP-data) """
+        # filters = None
+        # filters = dict(
+        #     # month_list=[1, 2, 3],
+        #     month_list=[4, 5, 6],
+        #     # month_list=[7, 8, 9],
+        #     # month_list=[10, 11, 12],
+        #     # ship_list=['77SE', '34AR']
+        #     # serno_min=311,
+        #     # serno_max=355,
+        # )
+        print(type(filters), filters)
+        # s = ctdvis_session.Session(visualize_setting='smhi_vis', data_directory=directory, filters=filters)
+        s = ctdvis_session.Session(visualize_setting='deep_vis', data_directory=directory, filters=filters)
+        s.setup_datahandler()
+        layout = s.run_tool(return_layout=True)
+
+        return layout
+
+    def run(self, directory=None, **filters):
+        bokeh_layout = self._bokeh_qc_tool(directory=directory, **filters)
+        doc = curdoc()
+        doc.add_root(bokeh_layout)
+
 
 def get_logger(existing_logger=None):
     if not os.path.exists('log'):
@@ -702,9 +745,10 @@ def get_logger(existing_logger=None):
 
 
 if __name__ == '__main__':
-    if 1:
-        c = SveaController()
 
+    c = SveaController()
+
+    if 0:
         c.working_directory = r'C:\mw\temp_svea/svea_repo'
         c.cnv_files = r'C:\mw\data\cnv_files'
         c.raw_files = r'C:\mw\data\sbe_raw_files'
@@ -713,6 +757,10 @@ if __name__ == '__main__':
         c.sbe_processing()
         c.create_metadata_file()
         c.create_standard_format()
+
+    if 1:
+        directory = r'C:\mw\Profile\2019\SHARK_Profile_2019_BAS_DEEP\processed_data'
+        c.open_visual_qc(directory=directory, month_list=[4, 5, 6])
 
     # s1 = SensorInfo()
     # s1.load_xlsx_sheet(r'C:\mw\Profile\2018\SHARK_Profile_2018_BAS_DEEP\received_data/CTD sensorinfo_org.xlsx', 'Sensorinfo')
