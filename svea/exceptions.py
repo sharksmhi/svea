@@ -17,3 +17,7 @@ class PathError(SveaException):
 
 class PermissionError(SveaException):
     pass
+
+
+class MissingSharkModules(SveaException):
+    pass

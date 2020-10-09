@@ -5,6 +5,9 @@ from pathlib import Path
 import os
 import openpyxl
 
+import subprocess
+import webbrowser
+
 from ctdpy.core import session as ctdpy_session
 from ctdpy.core.utils import generate_filepaths, get_reversed_dictionary
 from sharkpylib.qc.qc_default import QCBlueprint
@@ -76,6 +79,8 @@ class SveaController:
         self.dirs['raw_files'] = None
         self.dirs['standard_files'] = None
         self.dirs['standard_files_qc'] = None
+
+        self.bokeh_visualize_setting = 'smhi_vis'
 
         self._steps = SveaSteps()
 
@@ -185,8 +190,32 @@ class SveaController:
         self._steps.perform_automatic_qc = True
         return self.dirs['standard_files_qc']
 
-    def open_visual_qc(self, directory, **filters):
-        self._visual_qc_object.run(directory=directory, **filters)
+    def open_visual_qc(self, server_file_directory=None, venv_path=None, **filters):
+        def check_valid_server_directory(d):
+            required = ['sharkpylib', 'ctdpy', 'ctdvis']
+            names = os.listdir(d)
+            missing = []
+            for req in required:
+                if req not in names:
+                    missing.append(req)
+            if missing:
+                raise exceptions.MissingSharkModules
+
+        if not venv_path:
+            venv_path = Path(Path(__file__).parent.parent, 'venv')
+        else:
+            venv_path = Path(venv_path)
+        if not venv_path.exists():
+            raise exceptions.PathError('virtual environment not found')
+
+        check_valid_server_directory(server_file_directory)
+
+        self._visual_qc_object.set_options(data_directory=self.dirs['standard_files_qc'],
+                                           visualize_setting=self.bokeh_visualize_setting,
+                                           server_file_directory=server_file_directory,
+                                           venv_path=venv_path,
+                                           **filters)
+        self._visual_qc_object.run()
         self._steps.open_visual_qc = True
 
     def send_files_to_ftp(self):
@@ -698,6 +727,11 @@ class AutomaticQC:
 class VisualQC:
     def __init__(self, logger=None):
         self.logger = get_logger(logger)
+        self.bokeh_server_file_name = 'run_bokeh_server.py'
+        self.bokeh_server_file_path = Path()
+        self.run_bokeh_server_batch_file_path = Path(Path(__file__).parent, 'temp', 'run_bokeh_server.bat')
+        self.url_base = None
+        self.lines = []
 
     def __repr__(self):
         str_list = ['Filter options are:']
@@ -705,33 +739,54 @@ class VisualQC:
             str_list.append(s)
         return '\n'.join(str_list)
 
-    def _bokeh_qc_tool(self, directory=None, **filters):
-        # data_dir = 'C:\\Temp\\CTD_DV\\qc_SMHI_2018\\ctd_std_fmt_20200622_130128_april_2020'
-        # data_dir = 'C:\\Arbetsmapp\\datasets\\Profile\\2018\\SHARK_Profile_2018_BAS_SMHI\\processed_data'
+    def set_options(self, data_directory=None, visualize_setting='', server_file_directory=None, venv_path=None, **filters):
+        template_source_path = Path(Path(__file__).parent, 'templates', 'bokeh_server_template.py')
 
-        """ Filters are advised to be implemented if the datasource is big, (~ >3 months of SMHI-EXP-data) """
-        # filters = None
-        # filters = dict(
-        #     # month_list=[1, 2, 3],
-        #     month_list=[4, 5, 6],
-        #     # month_list=[7, 8, 9],
-        #     # month_list=[10, 11, 12],
-        #     # ship_list=['77SE', '34AR']
-        #     # serno_min=311,
-        #     # serno_max=355,
-        # )
-        print(type(filters), filters)
-        # s = ctdvis_session.Session(visualize_setting='smhi_vis', data_directory=directory, filters=filters)
-        s = ctdvis_session.Session(visualize_setting='deep_vis', data_directory=directory, filters=filters)
-        s.setup_datahandler()
-        layout = s.run_tool(return_layout=True)
+        self.lines = []
+        with open(template_source_path) as fid:
+            for line in fid:
+                if line.startswith('URL'):
+                    self.url_base = line.split('=')[1].strip().strip('"').strip("'")
+                elif line.startswith('DATA_DIR'):
+                    line = f'DATA_DIR = r"{data_directory}"\n'
+                elif filters.get('month_list') and line.startswith('MONTH_LIST'):
+                    line = f'MONTH_LIST = {filters.get("month_list")}\n'
+                elif filters.get('ship_list') and line.startswith('SHIP_LIST'):
+                    line = f'SHIP_LIST = {filters.get("ship_list")}\n'
+                elif filters.get('serno_min') and line.startswith('SERNO_MIN'):
+                    line = f'SERNO_MIN = {filters.get("serno_min")}\n'
+                elif filters.get('serno_max') and line.startswith('SERNO_MAX'):
+                    line = f'SERNO_MAX = {filters.get("serno_max")}\n'
+                elif visualize_setting and line.startswith('VISUALIZE_SETTINGS'):
+                    line = f'VISUALIZE_SETTINGS = "{visualize_setting}"\n'
+                self.lines.append(line)
 
-        return layout
+        self._save_server_file(server_file_directory)
+        self._create_batch_file(venv_path)
 
-    def run(self, directory=None, **filters):
-        bokeh_layout = self._bokeh_qc_tool(directory=directory, **filters)
-        doc = curdoc()
-        doc.add_root(bokeh_layout)
+    def _save_server_file(self, directory):
+        if not self.lines:
+            raise exceptions.SveaException
+        self.bokeh_server_file_path = Path(directory, self.bokeh_server_file_name)
+        with open(self.bokeh_server_file_path, 'w') as fid:
+            fid.write(''.join(self.lines))
+
+    def _create_batch_file(self, venv_path):
+        with open(self.run_bokeh_server_batch_file_path, 'w') as fid:
+            fid.write(f'call {str(venv_path)}/Scripts/activate\n')
+            fid.write(f'cd {str(self.bokeh_server_file_path.parent)}\n')
+            fid.write(f'bokeh serve {self.bokeh_server_file_name}')
+            
+    def _run_server(self):
+        self.bokeh_subprocess = subprocess.Popen(str(self.run_bokeh_server_batch_file_path))
+
+    def _open_webbrowser(self):
+        url = self.url_base + self.bokeh_server_file_path.stem
+        webbrowser.open(url=url)
+
+    def run(self):
+        self._run_server()
+        self._open_webbrowser()
 
 
 def get_logger(existing_logger=None):
@@ -760,7 +815,14 @@ if __name__ == '__main__':
 
     if 1:
         directory = r'C:\mw\Profile\2019\SHARK_Profile_2019_BAS_DEEP\processed_data'
-        c.open_visual_qc(directory=directory, month_list=[4, 5, 6])
+        server_directory = r'C:\mw\git\svea'
+        venv_path = r'C:\mw\git\svea\venv'
+        c.open_visual_qc(data_directory=directory,
+                         visualize_setting='deep_vis',
+                         server_file_directory=server_directory,
+                         venv_path=venv_path,
+                         month_list=[4, 5, 6])
+
 
     # s1 = SensorInfo()
     # s1.load_xlsx_sheet(r'C:\mw\Profile\2018\SHARK_Profile_2018_BAS_DEEP\received_data/CTD sensorinfo_org.xlsx', 'Sensorinfo')
