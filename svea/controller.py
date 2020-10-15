@@ -67,7 +67,6 @@ class CommonFiles:
         self._file_paths = file_paths
 
 
-
 class SveaController:
     def __init__(self, logger=None):
         self.logger = get_logger(logger)
@@ -81,6 +80,7 @@ class SveaController:
         self.dirs['standard_files_qc'] = None
 
         self.bokeh_visualize_setting = 'smhi_vis'
+        self.bokeh_visualize_setting = 'deep_vis'
 
         self._steps = SveaSteps()
 
@@ -199,7 +199,7 @@ class SveaController:
                 if req not in names:
                     missing.append(req)
             if missing:
-                raise exceptions.MissingSharkModules
+                raise exceptions.MissingSharkModules(str(missing))
 
         if not venv_path:
             venv_path = Path(Path(__file__).parent.parent, 'venv')
@@ -209,6 +209,11 @@ class SveaController:
             raise exceptions.PathError('virtual environment not found')
 
         check_valid_server_directory(server_file_directory)
+
+        if not self.dirs['standard_files_qc']:
+            raise exceptions.PathError('Path to qc standard files not set')
+        if not os.listdir(self.dirs['standard_files_qc']):
+            raise exceptions.MissingFiles('Missing files to visualize')
 
         self._visual_qc_object.set_options(data_directory=self.dirs['standard_files_qc'],
                                            visualize_setting=self.bokeh_visualize_setting,
@@ -313,7 +318,6 @@ class RawFiles(CommonFiles):
                 raise exceptions.PathError('Path given to RawFiles is not a directory')
         else:
             self._file_paths = [Path(file_path) for file_path in file_paths if file_path.split('.')[-1] in suffix_list]
-
 
 
 class Metadata:
@@ -817,9 +821,7 @@ if __name__ == '__main__':
         directory = r'C:\mw\Profile\2019\SHARK_Profile_2019_BAS_DEEP\processed_data'
         server_directory = r'C:\mw\git\svea'
         venv_path = r'C:\mw\git\svea\venv'
-        c.open_visual_qc(data_directory=directory,
-                         visualize_setting='deep_vis',
-                         server_file_directory=server_directory,
+        c.open_visual_qc(server_file_directory=server_directory,
                          venv_path=venv_path,
                          month_list=[4, 5, 6])
 
