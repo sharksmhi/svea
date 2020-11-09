@@ -807,20 +807,21 @@ if __name__ == '__main__':
 
     c = SveaController()
 
-    if 0:
-        c.working_directory = r'C:\mw\temp_svea/svea_repo'
-        c.cnv_files = r'C:\mw\data\cnv_files'
-        c.raw_files = r'C:\mw\data\sbe_raw_files'
-
-        c.set_overwrite_permission(True)
-        c.sbe_processing()
-        c.create_metadata_file()
-        c.create_standard_format()
-
     if 1:
+        c.working_directory = r'C:\mw\temp_svea/svea_repo'
+        # c.cnv_files = r'C:\mw\data\cnv_files'
+        # c.raw_files = r'C:\mw\data\sbe_raw_files'
+        #
+        # c.set_overwrite_permission(True)
+        # c.sbe_processing()
+        # c.create_metadata_file()
+        # c.create_standard_format()
+
+    if 0:
         directory = r'C:\mw\Profile\2019\SHARK_Profile_2019_BAS_DEEP\processed_data'
         server_directory = r'C:\mw\git\svea'
         venv_path = r'C:\mw\git\svea\venv'
+        c.dirs['standard_files_qc'] = r'C:\mw\Profile\2019\SHARK_Profile_2019_BAS_DEEP\processed_data'
         c.open_visual_qc(server_file_directory=server_directory,
                          venv_path=venv_path,
                          month_list=[4, 5, 6])
