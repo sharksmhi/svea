@@ -14,6 +14,7 @@ from sharkpylib.qc.qc_default import QCBlueprint
 
 from bokeh.plotting import curdoc
 from ctdvis  import session as ctdvis_session
+from ctd_processing.processing import CtdProcessing
 
 from svea import exceptions
 
@@ -84,6 +85,8 @@ class SveaController:
 
         self._steps = SveaSteps()
 
+        self._ctd_processing_object = CtdProcessing()
+
         self._raw_files_object = RawFiles(logger=logger)
 
         self._metadata_object = Metadata(logger=self.logger)
@@ -143,7 +146,7 @@ class SveaController:
             self.dirs['standard_files_qc'] = None
         else:
             self.dirs['working'] = Path(directory)
-            self.dirs['raw_files'] = Path(self.dirs['working'], 'raw')
+            self.dirs['raw_files'] = Path(self.dirs['working'], 'raw_files')
             self.dirs['cnv_files'] = Path(self.dirs['working'], 'cnv')
             self.dirs['standard_files'] = Path(self.dirs['working'], 'standard_format')
             self.dirs['standard_files_qc'] = Path(self.dirs['working'], 'standard_format_auto_qc')
@@ -161,14 +164,27 @@ class SveaController:
     def metadata_file_path(self):
         return self._metadata_file_object.file_path
 
-    def sbe_processing(self):
-        # TODO: run processing
-        self._assert_directory()
+    @property
+    def ctd_processing_options(self):
+        return self._ctd_processing_object.options
+
+    def sbe_processing(self, file_path, **kwargs):
+        """
+        kwargs are options that you can get from self.ctd_processing_options
+        :param kwargs:
+        :return:
+        """
+        for key, value in kwargs.items():
+            setattr(self._ctd_processing_object, key, value)
+        self._ctd_processing_object.load_seabird_files(file_path)
+        self._ctd_processing_object.run_process()
+
+        self._assert_directory() 
         # if not self._raw_files_object.file_paths:
         #     raise exceptions.PathError('No raw files selected')
-        self._raw_files_object.change_location(self.dirs['raw_files'])
+        # self._raw_files_object.change_location(self.dirs['raw_files'])
         self._steps.sbe_processing = True
-        return self.dirs['raw_files']
+        # return self.dirs['raw_files']
 
     def create_metadata_file(self):
         self._assert_directory()
@@ -283,6 +299,7 @@ class SveaController:
         self._create_metadata_file_object.allow_overwrite = overwrite
         self._create_standard_files_object.allow_overwrite = overwrite
         self._automatic_qc_object.allow_overwrite = overwrite
+        self._ctd_processing_object.overwrite = overwrite
 
     def reset_paths(self):
         self.raw_files = None
@@ -306,7 +323,7 @@ class RawFiles(CommonFiles):
         if file_paths is None:
             self._file_paths = None
             return
-        suffix_list = ['bl', 'btl', 'hdr', 'hex', 'ros', 'XMLCON']
+        suffix_list = ['bl', 'btl', 'hdr', 'hex', 'ros', 'XMLCON', 'CON']
         print('=== file_paths', file_paths)
         if type(file_paths) in [str, Path]:
             file_paths = Path(file_paths)
