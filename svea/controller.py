@@ -70,7 +70,9 @@ class CommonFiles:
 
 class SveaController:
     def __init__(self, logger=None):
+        logger.debug('In SveaController')
         self.logger = get_logger(logger)
+        self.logger.debug('In SveaController')
         
         self.dirs = {}
 
@@ -85,7 +87,7 @@ class SveaController:
 
         self._steps = SveaSteps()
 
-        self._ctd_processing_object = CtdProcessing()
+        self._ctd_processing_object = CtdProcessing(logger=self.logger)
 
         self._raw_files_object = RawFiles(logger=logger)
 
@@ -201,7 +203,6 @@ class SveaController:
 
     def perform_automatic_qc(self):
         self._assert_directory()
-        print(self._automatic_qc_object.standard_files_object.file_paths)
         self._automatic_qc_object.run_qc(self.dirs['standard_files_qc'])
         self._steps.perform_automatic_qc = True
         return self.dirs['standard_files_qc']
@@ -811,10 +812,10 @@ class VisualQC:
 
 
 def get_logger(existing_logger=None):
-    if not os.path.exists('log'):
-        os.makedirs('log')
     if existing_logger:
         return existing_logger
+    if not os.path.exists('log'):
+        os.makedirs('log')
     logging.config.fileConfig('logging.conf')
     logger = logging.getLogger('timedrotating')
     return logger
