@@ -1,9 +1,11 @@
 .idea
 svea/log
+svea/temp/*
 run_bokeh_server.py
 ctdpy
 ctdvis
 sharkpylib
+bokeh_server
 
 
 # Byte-compiled / optimized / DLL files

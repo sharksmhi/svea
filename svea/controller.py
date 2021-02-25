@@ -3,6 +3,7 @@ import shutil
 import time
 from pathlib import Path
 import os
+import sys
 import openpyxl
 
 import subprocess
@@ -21,6 +22,8 @@ from svea import exceptions
 import logging
 import logging.config
 import logging.handlers
+
+SHARK_PACKAGES = ['sharkpylib', 'ctdpy', 'ctdvis']
 
 
 class SveaSteps:
@@ -70,7 +73,6 @@ class CommonFiles:
 
 class SveaController:
     def __init__(self, logger=None):
-        logger.debug('In SveaController')
         self.logger = get_logger(logger)
         self.logger.debug('In SveaController')
         
@@ -84,6 +86,9 @@ class SveaController:
 
         self.bokeh_visualize_setting = 'smhi_vis'
         self.bokeh_visualize_setting = 'deep_vis'
+
+        self.bokeh_server_venv_path = Path(Path(__file__).parent.parent, 'venv')
+        self.bokeh_server_directory = Path(Path(__file__).parent.parent, 'bokeh_server')
 
         self._steps = SveaSteps()
 
@@ -178,6 +183,7 @@ class SveaController:
         """
         for key, value in kwargs.items():
             setattr(self._ctd_processing_object, key, value)
+        print('FILE PATH', file_path)
         self._ctd_processing_object.load_seabird_files(file_path)
         self._ctd_processing_object.run_process()
 
@@ -207,25 +213,19 @@ class SveaController:
         self._steps.perform_automatic_qc = True
         return self.dirs['standard_files_qc']
 
-    def open_visual_qc(self, server_file_directory=None, venv_path=None, **filters):
-        def check_valid_server_directory(d):
-            required = ['sharkpylib', 'ctdpy', 'ctdvis']
-            names = os.listdir(d)
-            missing = []
-            for req in required:
-                if req not in names:
-                    missing.append(req)
-            if missing:
-                raise exceptions.MissingSharkModules(str(missing))
+    def open_visual_qc(self, server_file_directory=None, venv_path=None, shark_package_root=None, **filters): 
+        
+        if server_file_directory:
+            path = Path(server_file_directory)
+            if path.exists():
+                self.bokeh_server_directory = path
 
-        if not venv_path:
-            venv_path = Path(Path(__file__).parent.parent, 'venv')
-        else:
-            venv_path = Path(venv_path)
-        if not venv_path.exists():
-            raise exceptions.PathError('virtual environment not found')
+        if venv_path:
+            self.bokeh_server_venv_path = Path(venv_path)
+        if not self.bokeh_server_venv_path.exists():
+            raise exceptions.PathError(f'Virtual environment not found at {self.bokeh_server_venv_path}')
 
-        check_valid_server_directory(server_file_directory)
+        self._create_bokeh_server_source_directory(shark_package_root=shark_package_root)
 
         if not self.dirs['standard_files_qc']:
             raise exceptions.PathError('Path to qc standard files not set')
@@ -234,11 +234,51 @@ class SveaController:
 
         self._visual_qc_object.set_options(data_directory=self.dirs['standard_files_qc'],
                                            visualize_setting=self.bokeh_visualize_setting,
-                                           server_file_directory=server_file_directory,
-                                           venv_path=venv_path,
+                                           server_file_directory=self.bokeh_server_directory,
+                                           venv_path=self.bokeh_server_venv_path,
                                            **filters)
         self._visual_qc_object.run()
         self._steps.open_visual_qc = True
+
+    def _create_bokeh_server_source_directory(self, shark_package_root=None):
+        if not self.bokeh_server_directory.exists():
+            os.makedirs(self.bokeh_server_directory)
+
+        # Check if shark packages are in venv that is going to be used. 
+        packages_in_venv = get_paths_to_shark_packages_in_venv(self.bokeh_server_venv_path)
+        packages_in_bokeh_server_root = get_shark_packages_in_bokeh_server_root(self.bokeh_server_directory)
+
+        shark_package_source = {}
+        if shark_package_root:
+            shark_package_source = get_paths_to_shark_packages_in_venv(shark_package_root)
+
+        for package in SHARK_PACKAGES:
+            if package in packages_in_bokeh_server_root:
+                continue
+            if packages_in_venv.get(package):
+                continue 
+            source_directory = shark_package_source.get(package)
+            if source_directory:
+                # Copy package to bokeh server directory
+                target_directory = Path(self.bokeh_server_directory, source_directory.name)
+                shutil.copytree(source_directory, target_directory)
+                continue
+            raise exceptions.MissingSharkModules(str(missing))
+            
+
+    # def _check_valid_server_directory(self, d):
+    #     required = ['sharkpylib', 'ctdpy', 'ctdvis']
+    #     names = os.listdir(d)
+    #     missing = []
+    #     for req in required:
+    #         if req in sys.modules:
+    #             continue
+    #         if req in names: 
+    #             continue
+    #         missing.append(req)
+    #     return missing
+    #     # if missing:
+    #     #     raise exceptions.MissingSharkModules(str(missing))
 
     def send_files_to_ftp(self):
         self._steps.send_files_to_ftp = True
@@ -289,6 +329,22 @@ class SveaController:
 
     def set_path_standard_format_files(self, paths):
         self.standard_format_files = paths
+        
+    @property
+    def standard_format_files_qc(self):
+        return self.dirs['standard_files_qc']
+    
+    @standard_format_files_qc.setter
+    def standard_format_files_qc(self, path):
+        try:
+            path = Path(path)
+            if path.exists():
+                self.dirs['standard_files_qc'] = path
+        except:
+            pass
+            
+    def set_path_standard_format_files_qc(self, paths):
+        self.standard_format_files_qc = paths
 
     def set_overwrite_permission(self, overwrite):
         if type(overwrite) != bool:
@@ -751,7 +807,9 @@ class VisualQC:
         self.logger = get_logger(logger)
         self.bokeh_server_file_name = 'run_bokeh_server.py'
         self.bokeh_server_file_path = Path()
-        self.run_bokeh_server_batch_file_path = Path(Path(__file__).parent, 'temp', 'run_bokeh_server.bat')
+        # self.run_bokeh_server_batch_file_path = Path(Path(__file__).parent, 'temp', 'run_bokeh_server.bat')
+        # if not self.run_bokeh_server_batch_file_path.parent.exists():
+        #     os.makedirs(self.run_bokeh_server_batch_file_path.parent)
         self.url_base = None
         self.lines = []
 
@@ -763,7 +821,6 @@ class VisualQC:
 
     def set_options(self, data_directory=None, visualize_setting='', server_file_directory=None, venv_path=None, **filters):
         template_source_path = Path(Path(__file__).parent, 'templates', 'bokeh_server_template.py')
-
         self.lines = []
         with open(template_source_path) as fid:
             for line in fid:
@@ -784,7 +841,7 @@ class VisualQC:
                 self.lines.append(line)
 
         self._save_server_file(server_file_directory)
-        self._create_batch_file(venv_path)
+        self._create_batch_file(server_file_directory, venv_path)
 
     def _save_server_file(self, directory):
         if not self.lines:
@@ -793,7 +850,8 @@ class VisualQC:
         with open(self.bokeh_server_file_path, 'w') as fid:
             fid.write(''.join(self.lines))
 
-    def _create_batch_file(self, venv_path):
+    def _create_batch_file(self, directory, venv_path):
+        self.run_bokeh_server_batch_file_path = Path(directory, 'run_bokeh_server.bat')
         with open(self.run_bokeh_server_batch_file_path, 'w') as fid:
             fid.write(f'call {str(venv_path)}/Scripts/activate\n')
             fid.write(f'cd {str(self.bokeh_server_file_path.parent)}\n')
@@ -819,6 +877,33 @@ def get_logger(existing_logger=None):
     logging.config.fileConfig('logging.conf')
     logger = logging.getLogger('timedrotating')
     return logger
+
+def get_directrory_path_for_string(root, string):
+    for root, dirs, files in os.walk(root, topdown=False):
+        # for name in files:
+        #     print(os.path.join(root, name))
+        for name in dirs:
+            if name == string:
+                return Path(root, name)
+    return None
+
+def get_paths_to_shark_packages_in_venv(venv): 
+    paths = {}
+    for package in SHARK_PACKAGES:
+        path = get_directrory_path_for_string(venv, package) 
+        if path:
+            paths[path.name] = path
+    return paths 
+
+def get_shark_packages_in_bokeh_server_root(boke_server_root):
+    packages = []
+    for d in os.listdir(boke_server_root):
+        if d in SHARK_PACKAGES:
+            packages.append(d)
+    return packages
+
+
+
 
 
 if __name__ == '__main__':

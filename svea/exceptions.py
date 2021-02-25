@@ -21,3 +21,4 @@ class PermissionError(SveaException):
 
 class MissingSharkModules(SveaException):
     pass
+
