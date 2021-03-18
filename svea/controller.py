@@ -239,6 +239,9 @@ class SveaController:
                                            **filters)
         self._visual_qc_object.run()
         self._steps.open_visual_qc = True
+        
+    def close_visual_qc(self):
+        self._visual_qc_object.kill_server()
 
     def _create_bokeh_server_source_directory(self, shark_package_root=None):
         if not self.bokeh_server_directory.exists():
@@ -858,7 +861,14 @@ class VisualQC:
             fid.write(f'bokeh serve {self.bokeh_server_file_name}')
             
     def _run_server(self):
-        self.bokeh_subprocess = subprocess.Popen(str(self.run_bokeh_server_batch_file_path))
+        self.bokeh_subprocess = subprocess.Popen(str(self.run_bokeh_server_batch_file_path), 
+                                                 shell=False, stdout=subprocess.PIPE)
+        
+    def kill_server(self):
+        if hasattr(self, 'bokeh_subprocess'):
+            print('killing server')
+            self.bokeh_subprocess.kill()
+            print('It worked')
 
     def _open_webbrowser(self):
         url = self.url_base + self.bokeh_server_file_path.stem
