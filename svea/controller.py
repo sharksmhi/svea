@@ -15,7 +15,7 @@ from sharkpylib.qc.qc_default import QCBlueprint
 
 from bokeh.plotting import curdoc
 from ctdvis  import session as ctdvis_session
-from ctd_processing.processing import CtdProcessing
+from ctd_processing.former_processing import CtdProcessing
 
 from svea import exceptions
 
